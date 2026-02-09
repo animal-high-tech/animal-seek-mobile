@@ -142,7 +142,7 @@ export default function MemberRangingMockScreen() {
   const rangingStatusText = useMemo(() => {
     if (!rangingEnabled) return 'Off';
     const s = String(ranging.state || '');
-    if (s === 'unavailable') return 'Unavailable (build a dev client)';
+    if (s === 'unavailable') return 'Unavailable (missing iOS entitlement, unsupported device, or no dev client)';
     if (s === 'idle') return 'Idle';
     if (s === 'searching') return 'Searching for peer…';
     if (s === 'connecting') return 'Connecting…';
