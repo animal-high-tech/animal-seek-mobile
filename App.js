@@ -6,12 +6,12 @@ import {
   Easing,
   Image,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   useColorScheme,
   View,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 export default function App() {
   const scheme = useColorScheme() ?? 'light';
@@ -76,68 +76,72 @@ export default function App() {
   }, [logoScale, logoTranslateY]);
 
   return (
-    <SafeAreaView style={[styles.screen, { backgroundColor: colors.bg }]}>
-      {/* Background (decorative) */}
-      <View style={StyleSheet.absoluteFill} pointerEvents="none">
-        <Image
-          source={require('./assets/aniamlseek.png')}
-          style={[styles.bgImage, { opacity: scheme === 'dark' ? 0.16 : 0.10 }]}
-          resizeMode="cover"
-          blurRadius={scheme === 'dark' ? 18 : 12}
-        />
-        <View style={[styles.blob, styles.blobTop, { backgroundColor: scheme === 'dark' ? '#1a4d8f' : '#7cc4ff' }]} />
-        <View
-          style={[
-            styles.blob,
-            styles.blobBottom,
-            { backgroundColor: scheme === 'dark' ? '#2f7d32' : '#7ee081' },
-          ]}
-        />
-        <View style={[styles.bgTint, { backgroundColor: colors.bg, opacity: scheme === 'dark' ? 0.62 : 0.72 }]} />
-      </View>
-
-      <View style={styles.container}>
-        <View style={[styles.heroCard, { backgroundColor: colors.cardBg, borderColor: colors.border }]}>
-          <Animated.View
-            style={[
-              styles.mascotWrap,
-              { borderColor: colors.border },
-              { transform: [{ translateY: logoTranslateY }, { scale: logoScale }] },
-            ]}
-          >
-            <Image source={require('./assets/icon.png')} style={styles.logo} />
-          </Animated.View>
-
-          <Text style={[styles.title, { color: colors.text }]}>AnimalSeek</Text>
-
+    <SafeAreaProvider>
+      <SafeAreaView style={[styles.screen, { backgroundColor: colors.bg }]}>
+        {/* Background (decorative) */}
+        <View style={StyleSheet.absoluteFill} pointerEvents="none">
+          <Image
+            source={require('./assets/aniamlseek.png')}
+            style={[styles.bgImage, { opacity: scheme === 'dark' ? 0.16 : 0.10 }]}
+            resizeMode="cover"
+            blurRadius={scheme === 'dark' ? 18 : 12}
+          />
           <View
-            style={[styles.stripWrap, { backgroundColor: colors.stripBg, borderColor: colors.stripBorder }]}
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
-          >
-            <Text style={[styles.strip, { color: colors.text }]} aria-hidden numberOfLines={1} ellipsizeMode="tail">
-              🧭🐾🏔️⛷️🧭🐾🏔️⛷️
-            </Text>
-          </View>
+            style={[styles.blob, styles.blobTop, { backgroundColor: scheme === 'dark' ? '#1a4d8f' : '#7cc4ff' }]}
+          />
+          <View
+            style={[
+              styles.blob,
+              styles.blobBottom,
+              { backgroundColor: scheme === 'dark' ? '#2f7d32' : '#7ee081' },
+            ]}
+          />
+          <View style={[styles.bgTint, { backgroundColor: colors.bg, opacity: scheme === 'dark' ? 0.62 : 0.72 }]} />
+        </View>
 
-          <Text style={[styles.slogan, { color: colors.subtext }]}>
-            Find your teammate offline in the backcountry.
-          </Text>
-
-          <View style={styles.actions}>
-            <Pressable
-              style={[styles.primaryBtn, { backgroundColor: colors.primary, borderColor: colors.border }]}
-              onPress={() => Alert.alert('Coming soon', 'Next we’ll add pairing + offline ranging.')}
-              accessibilityRole="button"
+        <View style={styles.container}>
+          <View style={[styles.heroCard, { backgroundColor: colors.cardBg, borderColor: colors.border }]}>
+            <Animated.View
+              style={[
+                styles.mascotWrap,
+                { borderColor: colors.border },
+                { transform: [{ translateY: logoTranslateY }, { scale: logoScale }] },
+              ]}
             >
-              <Text style={[styles.primaryBtnText, { color: colors.primaryText }]}>Get started</Text>
-            </Pressable>
+              <Image source={require('./assets/icon.png')} style={styles.logo} />
+            </Animated.View>
+
+            <Text style={[styles.title, { color: colors.text }]}>AnimalSeek</Text>
+
+            <View
+              style={[styles.stripWrap, { backgroundColor: colors.stripBg, borderColor: colors.stripBorder }]}
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+            >
+              <Text style={[styles.strip, { color: colors.text }]} aria-hidden numberOfLines={1} ellipsizeMode="tail">
+                🧭🐾🏔️⛷️🧭🐾🏔️⛷️
+              </Text>
+            </View>
+
+            <Text style={[styles.slogan, { color: colors.subtext }]}>
+              Find your teammate offline in the backcountry.
+            </Text>
+
+            <View style={styles.actions}>
+              <Pressable
+                style={[styles.primaryBtn, { backgroundColor: colors.primary, borderColor: colors.border }]}
+                onPress={() => Alert.alert('Coming soon', 'Next we’ll add pairing + offline ranging.')}
+                accessibilityRole="button"
+              >
+                <Text style={[styles.primaryBtnText, { color: colors.primaryText }]}>Get started</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
-      </View>
 
-      <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
-    </SafeAreaView>
+        <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 

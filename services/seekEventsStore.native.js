@@ -28,10 +28,11 @@ export function initSeekEventsStore() {
 
   // Simple, best-effort schema upgrades for existing installs.
   // (SQLite doesn't support `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.)
-  try {
+  // Avoid throwing on fresh installs by checking schema first.
+  const cols = db.getAllSync(`PRAGMA table_info(seek_events);`);
+  const hasMemberId = Array.isArray(cols) && cols.some((c) => c?.name === 'member_id');
+  if (!hasMemberId) {
     db.execSync(`ALTER TABLE seek_events ADD COLUMN member_id TEXT;`);
-  } catch {
-    // ignore if already exists
   }
 }
 

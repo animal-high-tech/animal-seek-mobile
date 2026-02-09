@@ -17,12 +17,16 @@
       "bundleIdentifier": "com.animalseek.app",
       "supportsTablet": true,
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSLocationWhenInUseUsageDescription": "Animal Seek uses your location to share your last known position with your group.",
+        "NSBluetoothAlwaysUsageDescription": "Animal Seek uses Bluetooth to discover nearby group members for offline ranging.",
+        "NSBluetoothPeripheralUsageDescription": "Animal Seek uses Bluetooth to discover nearby group members for offline ranging."
       }
     },
     "android": {
       "package": "com.animalseek.app",
       "icon": "./assets/icon.png",
+      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -37,13 +41,17 @@
     },
     "plugins": [
       "expo-router",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-dev-client"
     ],
     "experiments": {
       "typedRoutes": true
     },
     "extra": {
-      "router": {}
+      "router": {},
+      "eas": {
+        "projectId": "248cd514-0743-4ba5-82af-607ff41efb71"
+      }
     }
   }
 }

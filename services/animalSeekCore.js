@@ -127,3 +127,24 @@ export async function getSeekMembersByGroup(seekGroupId) {
   });
 }
 
+export async function putSeekMemberLocation(seekMemberId, params) {
+  const body = {
+    deviceUuid: params.deviceUuid,
+    latitude: params.latitude,
+    longitude: params.longitude,
+    ...(params.accuracy !== undefined ? { accuracy: params.accuracy } : {}),
+    ...(params.altitude !== undefined ? { altitude: params.altitude } : {}),
+    ...(params.heading !== undefined ? { heading: params.heading } : {}),
+    ...(params.speed !== undefined ? { speed: params.speed } : {}),
+    ...(params.recordedAt ? { recordedAt: params.recordedAt } : {}),
+  };
+  return requestJson(`/api/v0/seek-member/${seekMemberId}/location`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteSeekMember(seekMemberId) {
+  return requestJson(`/api/v0/seek-member/${seekMemberId}`, { method: 'DELETE' });
+}
+

@@ -20,9 +20,19 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ICONS } from '../../constants/icons';
 import ContributorIconPicker from '../../components/ContributorIconPicker';
 import { pickRandomContributorIconId } from '../../constants/icons';
-import { getSeekGroup, getSeekMembersByGroup, postSeekMember, putSeekGroup } from '../../services/animalSeekCore';
+import {
+  getSeekGroup,
+  getSeekMembersByGroup,
+  deleteSeekMember,
+  postSeekMember,
+  putSeekGroup,
+  putSeekMember,
+  putSeekMemberLocation,
+} from '../../services/animalSeekCore';
 import SeekGroupSettingsModal from '../../components/SeekGroupSettingsModal';
 import { getDeviceUuid } from '../../services/deviceId';
+import { isLocationSharingActive, startLocationSharing, stopLocationSharing } from '../../services/locationSharing';
+import { listSeekEvents } from '../../services/seekEventsStore';
 
 export default function SeekGroupDetailScreen() {
   const { seekGroupId } = useLocalSearchParams();
@@ -44,6 +54,9 @@ export default function SeekGroupDetailScreen() {
   const [newMemberName, setNewMemberName] = useState('');
   const [newMemberIconId, setNewMemberIconId] = useState(undefined);
   const [addingMember, setAddingMember] = useState(false);
+  const [deletingMemberId, setDeletingMemberId] = useState('');
+  const [sharing, setSharing] = useState(false);
+  const [shareError, setShareError] = useState('');
 
   const load = useCallback(
     async (mode = 'initial') => {
@@ -91,6 +104,43 @@ export default function SeekGroupDetailScreen() {
   }
 
   const memberCount = members?.length ?? 0;
+  const storedMemberId = useMemo(() => {
+    try {
+      const events = listSeekEvents?.() ?? [];
+      const ev = events.find((e) => String(e?.seekGroupId) === id);
+      return ev?.memberId ? String(ev.memberId) : '';
+    } catch {
+      return '';
+    }
+  }, [id]);
+
+  const myMember = useMemo(() => {
+    if (storedMemberId) {
+      return members.find((m) => String(m?.id) === storedMemberId) ?? null;
+    }
+    return members.find((m) => m?.deviceUuid && m.deviceUuid === currentDeviceUuid) ?? null;
+  }, [members, storedMemberId, currentDeviceUuid]);
+
+  // Best-effort: older app versions could create a member without setting deviceUuid,
+  // making it appear "unoccupied" even though a device is using it.
+  useEffect(() => {
+    if (!id || !storedMemberId || !myMember?.id) return;
+    if (myMember.deviceUuid) return;
+    putSeekMember(storedMemberId, { deviceUuid: currentDeviceUuid }).catch(() => {
+      // ignore (may conflict if member is already claimed elsewhere)
+    });
+  }, [id, storedMemberId, myMember?.id, myMember?.deviceUuid, currentDeviceUuid]);
+
+  useEffect(() => {
+    setSharing(isLocationSharingActive(id));
+  }, [id]);
+
+  useEffect(() => {
+    return () => {
+      // Best-effort stop on unmount (avoid leaking watchers).
+      stopLocationSharing(id);
+    };
+  }, [id]);
 
   return (
     <ScrollView
@@ -171,6 +221,92 @@ export default function SeekGroupDetailScreen() {
 
             <Text style={styles.heroTitle}>{group.name || 'Event'}</Text>
             <Text style={styles.heroMetaText}>{memberCount} members</Text>
+
+            {/* Location sharing (moved into header/hero) */}
+            <View style={styles.heroSectionCard}>
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.sectionTitle}>Location sharing</Text>
+                <Text style={styles.mutedSmall}>{sharing ? 'On' : 'Off'}</Text>
+              </View>
+
+              {myMember ? (
+                <Text style={styles.muted}>
+                  Sharing GPS updates for <Text style={{ fontWeight: '900' }}>{myMember.name || 'this device'}</Text>{' '}
+                  when you move.
+                </Text>
+              ) : (
+                <Text style={styles.muted}>Claim a member on this device to start sharing GPS.</Text>
+              )}
+
+              {shareError ? <Text style={styles.error}>{shareError}</Text> : null}
+
+              <View style={styles.playStopRow}>
+                <Pressable
+                  style={[styles.playBtn, (sharing || !myMember) && styles.btnDisabled]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Start location sharing"
+                  disabled={sharing || !myMember}
+                  onPress={async () => {
+                    if (!id || sharing || !myMember?.id) return;
+                    setShareError('');
+                    try {
+                      await startLocationSharing({
+                        seekGroupId: id,
+                        onLocation: async (pos) => {
+                          const coords = pos?.coords ?? {};
+                          const lat = Number(coords.latitude);
+                          const lng = Number(coords.longitude);
+                          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+                          await putSeekMemberLocation(myMember.id, {
+                            deviceUuid: currentDeviceUuid,
+                            latitude: lat,
+                            longitude: lng,
+                            accuracy: coords.accuracy,
+                            altitude: coords.altitude,
+                            heading: coords.heading,
+                            speed: coords.speed,
+                            recordedAt: new Date(pos?.timestamp ?? Date.now()).toISOString(),
+                          });
+                        },
+                      });
+                      setSharing(true);
+                      await load('refresh');
+                    } catch (e) {
+                      setShareError(e?.message ?? 'Failed to start location sharing');
+                      setSharing(false);
+                    }
+                  }}
+                >
+                  <FontAwesome name="play" size={16} color="#fff" />
+                  <Text style={styles.playStopText}>Start</Text>
+                </Pressable>
+
+                <Pressable
+                  style={[
+                    styles.stopBtn,
+                    sharing ? styles.stopBtnActive : null,
+                    !sharing && styles.btnDisabled,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Stop location sharing"
+                  disabled={!sharing}
+                  onPress={async () => {
+                    setShareError('');
+                    try {
+                      await stopLocationSharing(id);
+                    } finally {
+                      setSharing(false);
+                    }
+                  }}
+                >
+                  <FontAwesome name="stop" size={16} color={sharing ? '#fff' : '#111'} />
+                  <Text style={[styles.playStopTextStop, sharing ? styles.playStopTextStopActive : null]}>
+                    Stop
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
           </View>
 
           {/* Members */}
@@ -201,11 +337,12 @@ export default function SeekGroupDetailScreen() {
                 const occupiedByThis = Boolean(m?.deviceUuid && m.deviceUuid === currentDeviceUuid);
                 const occupiedByOther = Boolean(m?.deviceUuid && m.deviceUuid !== currentDeviceUuid);
                 const isOccupied = Boolean(m?.deviceUuid);
-                const disabled = occupiedByThis || occupiedByOther;
+                const isDeleting = deletingMemberId && String(deletingMemberId) === String(m?.id);
+                const disabled = false;
                 return (
                   <Pressable
                     key={m.id}
-                    style={[styles.row, disabled && styles.rowDisabled]}
+                    style={[styles.row, (occupiedByThis || occupiedByOther) && styles.rowDisabled]}
                     accessibilityRole="button"
                     accessibilityLabel="Open member"
                     disabled={disabled}
@@ -217,9 +354,53 @@ export default function SeekGroupDetailScreen() {
                         {m.name || 'Unknown'}
                       </Text>
                       <Text style={styles.rowSubtitle} numberOfLines={1}>
-                        {occupiedByOther ? 'Occupied' : occupiedByThis ? 'This device' : ''}
+                        {occupiedByOther ? 'Occupied' : occupiedByThis ? 'This device' : 'Tap to range'}
                       </Text>
                     </View>
+                    <Pressable
+                      style={[styles.iconBtn, (addingMember || isDeleting) && styles.btnDisabled]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Delete member"
+                      disabled={addingMember || isDeleting}
+                      onPress={(e) => {
+                        e?.stopPropagation?.();
+                        if (!id || addingMember || isDeleting) return;
+                        const memberName = String(m?.name || 'this member');
+                        Alert.alert('Delete member?', `This will permanently delete ${memberName}.`, [
+                          { text: 'Cancel', style: 'cancel' },
+                          {
+                            text: 'Delete',
+                            style: 'destructive',
+                            onPress: async () => {
+                              setDeletingMemberId(String(m?.id || ''));
+                              try {
+                                // Best-effort: if deleting the member claimed by this device, stop sharing.
+                                if (occupiedByThis) {
+                                  try {
+                                    await stopLocationSharing(id);
+                                  } catch {
+                                    // ignore
+                                  }
+                                  setSharing(false);
+                                }
+                                await deleteSeekMember(String(m?.id || ''));
+                                await load('refresh');
+                              } catch (err) {
+                                Alert.alert('Could not delete member', err?.message ?? 'Please try again.');
+                              } finally {
+                                setDeletingMemberId('');
+                              }
+                            },
+                          },
+                        ]);
+                      }}
+                    >
+                      {isDeleting ? (
+                        <ActivityIndicator />
+                      ) : (
+                        <FontAwesome name="trash" size={18} color={occupiedByOther ? 'rgba(0,0,0,0.35)' : iconColor} />
+                      )}
+                    </Pressable>
                     <View style={[styles.statusDot, isOccupied ? styles.statusDotOccupied : styles.statusDotFree]} />
                   </Pressable>
                 );
@@ -252,7 +433,7 @@ export default function SeekGroupDetailScreen() {
       <Modal visible={addMemberOpen} animationType="slide" onRequestClose={() => setAddMemberOpen(false)}>
         <View style={[styles.modalRoot, { paddingTop: 16 + insets.top, paddingBottom: 16 + insets.bottom }]}>
           <Text style={styles.modalTitle}>Add member</Text>
-          <Text style={styles.modalHint}>This member will be claimed by the current device.</Text>
+          <Text style={styles.modalHint}>This will add an unclaimed member (not tied to this device).</Text>
           <View style={styles.rowInline}>
             <TextInput
               value={newMemberName}
@@ -280,7 +461,10 @@ export default function SeekGroupDetailScreen() {
                 if (!nm) return;
                 setAddingMember(true);
                 try {
-                  await postSeekMember(id, { name: nm, icon: newMemberIconId, deviceUuid: currentDeviceUuid });
+                  await postSeekMember(id, {
+                    name: nm,
+                    icon: newMemberIconId,
+                  });
                   setAddMemberOpen(false);
                   await load('refresh');
                 } catch (e) {
@@ -332,6 +516,10 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(0,0,0,0.10)',
     backgroundColor: 'rgba(255,255,255,0.55)',
   },
+  heroNavIconBtnStop: {
+    borderColor: 'rgba(176,0,32,0.18)',
+    backgroundColor: '#b00020',
+  },
   heroNavBtn: {
     height: 36,
     borderRadius: 12,
@@ -354,6 +542,15 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(0,0,0,0.10)',
     backgroundColor: 'rgba(255,255,255,0.55)',
     marginTop: 14,
+    gap: 12,
+  },
+  heroSectionCard: {
+    marginTop: 12,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.10)',
+    backgroundColor: 'rgba(255,255,255,0.55)',
     gap: 12,
   },
   sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -410,6 +607,7 @@ const styles = StyleSheet.create({
   },
   secondaryBtnText: { fontWeight: '700' },
   muted: { opacity: 0.7, lineHeight: 20 },
+  mutedSmall: { opacity: 0.7, fontSize: 12, fontWeight: '800' },
   error: { color: '#b00020' },
   row: { flexDirection: 'row', gap: 12, alignItems: 'center' },
   rowDisabled: { opacity: 0.5 },
@@ -417,6 +615,16 @@ const styles = StyleSheet.create({
   rowBody: { flex: 1 },
   rowTitle: { fontWeight: '900' },
   rowSubtitle: { opacity: 0.6, marginTop: 2, fontSize: 12 },
+  iconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.10)',
+    backgroundColor: 'rgba(255,255,255,0.35)',
+  },
   statusDot: {
     width: 10,
     height: 10,
@@ -430,5 +638,37 @@ const styles = StyleSheet.create({
   statusDotOccupied: {
     backgroundColor: '#2f7d32',
   },
+  playStopRow: { flexDirection: 'row', gap: 12, justifyContent: 'flex-end', alignItems: 'center' },
+  playBtn: {
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    minHeight: 44,
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2f7d32',
+  },
+  stopBtn: {
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    minHeight: 44,
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.5)',
+  },
+  stopBtnActive: {
+    borderColor: 'rgba(176,0,32,0.18)',
+    backgroundColor: '#b00020',
+  },
+  playStopText: { color: '#fff', fontSize: 16, fontWeight: '900' },
+  playStopTextStop: { color: '#111', fontSize: 16, fontWeight: '900' },
+  playStopTextStopActive: { color: '#fff' },
 });
 

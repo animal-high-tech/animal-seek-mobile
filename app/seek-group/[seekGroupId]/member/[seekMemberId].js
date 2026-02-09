@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  ActivityIndicator,
   Pressable,
+  Platform,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -10,6 +13,27 @@ import {
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Location from 'expo-location';
+
+import { getSeekMembersByGroup } from '../../../../services/animalSeekCore';
+import { ICONS } from '../../../../constants/icons';
+import { listSeekEvents } from '../../../../services/seekEventsStore';
+import { useRanging } from '../../../../services/ranging/useRanging';
+
+let MapView = null;
+let Marker = null;
+try {
+  // Avoid hard-crashing web builds if maps isn't supported there.
+  // (Expo native will include the module after installing react-native-maps.)
+  // eslint-disable-next-line global-require
+  const Maps = require('react-native-maps');
+  // CJS/ESM interop differs by bundler, so accept both shapes.
+  MapView = Maps?.default ?? Maps;
+  Marker = Maps?.Marker ?? Maps?.default?.Marker ?? null;
+} catch {
+  MapView = null;
+  Marker = null;
+}
 
 function clamp(n, a, b) {
   return Math.max(a, Math.min(b, n));
@@ -71,7 +95,66 @@ export default function MemberRangingMockScreen() {
   const insets = useSafeAreaInsets();
   const iconColor = scheme === 'dark' ? 'rgba(255,255,255,0.78)' : 'rgba(0,0,0,0.68)';
 
-  const { relativeDeg, distanceM, quality, bearingDeg, headingDeg } = useMockRanging();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [member, setMember] = useState(null);
+  const [locationPerm, setLocationPerm] = useState(false);
+  const [rangingEnabled, setRangingEnabled] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!id || !memberId) return;
+    setLoading(true);
+    setError('');
+    try {
+      const res = await getSeekMembersByGroup(id);
+      const list = Array.isArray(res?.payload) ? res.payload : [];
+      const found = list.find((m) => String(m?.id) === memberId) ?? null;
+      setMember(found);
+      if (!found) setError('Member not found.');
+    } catch (e) {
+      setError(e?.message ?? 'Failed to load member');
+    } finally {
+      setLoading(false);
+    }
+  }, [id, memberId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const myMemberId = useMemo(() => {
+    try {
+      const events = listSeekEvents?.() ?? [];
+      const ev = events.find((e) => String(e?.seekGroupId) === id);
+      return ev?.memberId ? String(ev.memberId) : '';
+    } catch {
+      return '';
+    }
+  }, [id]);
+
+  const ranging = useRanging({
+    seekGroupId: id,
+    myMemberId,
+    targetMemberId: memberId,
+    enabled: rangingEnabled,
+  });
+
+  const rangingStatusText = useMemo(() => {
+    if (!rangingEnabled) return 'Off';
+    const s = String(ranging.state || '');
+    if (s === 'unavailable') return 'Unavailable (build a dev client)';
+    if (s === 'idle') return 'Idle';
+    if (s === 'searching') return 'Searching for peer…';
+    if (s === 'connecting') return 'Connecting…';
+    if (s === 'ranging') return 'Ranging';
+    if (s === 'error') return 'Error';
+    return s || '…';
+  }, [rangingEnabled, ranging.state]);
+
+  const mock = useMockRanging();
+  const relativeDeg = rangingEnabled ? ranging.relativeDeg : mock.relativeDeg;
+  const distanceM = rangingEnabled ? ranging.distanceM ?? undefined : mock.distanceM;
+  const quality = rangingEnabled ? ranging.quality : mock.quality;
 
   const rotate = useRef(new Animated.Value(relativeDeg)).current;
   useEffect(() => {
@@ -87,63 +170,242 @@ export default function MemberRangingMockScreen() {
     outputRange: ['-180deg', '180deg'],
   });
 
+  const coords = useMemo(() => {
+    const lat = Number(member?.lastLatitude);
+    const lng = Number(member?.lastLongitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+    return { latitude: lat, longitude: lng };
+  }, [member?.lastLatitude, member?.lastLongitude]);
+
+  const memberEmoji = useMemo(() => {
+    const iconId = member?.icon;
+    return iconId && ICONS[iconId] ? ICONS[iconId] : '🐾';
+  }, [member?.icon]);
+
+  const locationUpdatedText = useMemo(() => {
+    const raw = member?.lastLocationAt;
+    if (!raw) return '';
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleString();
+  }, [member?.lastLocationAt]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function ensurePerm() {
+      // Only request on native when we have something to render.
+      if (Platform.OS === 'web') return;
+      if (!coords) return;
+      try {
+        const res = await Location.requestForegroundPermissionsAsync();
+        if (!cancelled) setLocationPerm(Boolean(res?.granted));
+      } catch {
+        if (!cancelled) setLocationPerm(false);
+      }
+    }
+    ensurePerm();
+    return () => {
+      cancelled = true;
+    };
+  }, [coords]);
+
   return (
-    <View style={[styles.screen, { paddingTop: 16 + insets.top }]}>
+    <View style={styles.screen}>
       <Stack.Screen options={{ headerShown: false }} />
 
-      <View style={styles.heroCard}>
-        <View style={styles.heroNavRow}>
-          <Pressable
-            onPress={() => router.back()}
-            accessibilityRole="button"
-            accessibilityLabel="Back"
-            style={styles.heroNavIconBtn}
-          >
-            <FontAwesome name="chevron-left" size={18} color={iconColor} />
-          </Pressable>
-          <View style={styles.heroNavSpacer} />
-          <QualityBars quality={quality} />
-        </View>
-
-        <Text style={styles.heroTitle}>Direction & Distance</Text>
-        <Text style={styles.heroMetaText} numberOfLines={1}>
-          Group: {id} • Member: {memberId}
-        </Text>
-
-        <View style={styles.compassWrap}>
-          <View style={styles.compassRing} />
-          <Text style={[styles.cardinal, styles.cardN]}>N</Text>
-          <Text style={[styles.cardinal, styles.cardE]}>E</Text>
-          <Text style={[styles.cardinal, styles.cardS]}>S</Text>
-          <Text style={[styles.cardinal, styles.cardW]}>W</Text>
-
-          <Animated.View style={[styles.arrowWrap, { transform: [{ rotate: rotateInterpolate }] }]}>
-            <View style={styles.arrow} />
-            <View style={styles.arrowTip} />
-          </Animated.View>
-        </View>
-
-        <Text style={styles.distanceText}>{formatMeters(distanceM)}</Text>
-
-        <View style={styles.metricsRow}>
-          <View style={styles.metricPill}>
-            <Text style={styles.metricLabel}>Heading</Text>
-            <Text style={styles.metricValue}>{Math.round(headingDeg)}°</Text>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingTop: 16 + insets.top, paddingBottom: 24 + insets.bottom },
+        ]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.heroCard}>
+          <View style={styles.heroNavRow}>
+            <Pressable
+              onPress={() => router.back()}
+              accessibilityRole="button"
+              accessibilityLabel="Back"
+              style={styles.heroNavIconBtn}
+            >
+              <FontAwesome name="chevron-left" size={18} color={iconColor} />
+            </Pressable>
+            <View style={styles.heroNavSpacer} />
           </View>
-          <View style={styles.metricPill}>
-            <Text style={styles.metricLabel}>Bearing</Text>
-            <Text style={styles.metricValue}>{Math.round(bearingDeg)}°</Text>
-          </View>
-          <View style={styles.metricPill}>
-            <Text style={styles.metricLabel}>Rel</Text>
-            <Text style={styles.metricValue}>{Math.round(relativeDeg)}°</Text>
-          </View>
-        </View>
 
-        <Text style={styles.note}>
-          Mock data for now. Next we’ll replace this with offline ranging + real compass.
-        </Text>
-      </View>
+          <Text style={styles.heroTitle}>Direction & Distance</Text>
+          <Text style={styles.heroMetaText} numberOfLines={1}>
+            Group: {id} • Member: {member?.name ? `${memberEmoji} ${member.name}` : memberId}
+          </Text>
+
+          {loading ? (
+            <View style={{ marginTop: 10 }}>
+              <ActivityIndicator />
+            </View>
+          ) : null}
+
+          {!loading && error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+          {/* Ranging controls */}
+          <View style={styles.rangingCard}>
+            <View style={styles.rangingHeaderRow}>
+              <Text style={styles.rangingTitle}>Ranging</Text>
+              <View style={styles.rangingHeaderRight}>
+                <QualityBars quality={quality} />
+                <Text style={styles.rangingMeta}>{rangingStatusText}</Text>
+              </View>
+            </View>
+
+            {!myMemberId ? (
+              <Text style={styles.muted}>Join this event on this device to start ranging.</Text>
+            ) : myMemberId === memberId ? (
+              <Text style={styles.muted}>You can’t range to yourself.</Text>
+            ) : null}
+
+            {rangingEnabled && ranging.error ? <Text style={styles.errorText}>{ranging.error}</Text> : null}
+
+            <View style={styles.playStopRow}>
+              <Pressable
+                style={[
+                  styles.playBtn,
+                  (rangingEnabled || !myMemberId || myMemberId === memberId) && styles.btnDisabled,
+                ]}
+                disabled={rangingEnabled || !myMemberId || myMemberId === memberId}
+                accessibilityRole="button"
+                accessibilityLabel="Start ranging"
+                onPress={async () => {
+                  setRangingEnabled(true);
+                  await ranging.start();
+                }}
+              >
+                <FontAwesome name="play" size={16} color="#fff" />
+                <Text style={styles.playStopText}>Start</Text>
+              </Pressable>
+
+              <Pressable
+                style={[
+                  styles.secondaryBtn,
+                  (!rangingEnabled || ranging.state === 'ranging' || !myMemberId || myMemberId === memberId) &&
+                    styles.btnDisabled,
+                ]}
+                disabled={!rangingEnabled || ranging.state === 'ranging' || !myMemberId || myMemberId === memberId}
+                accessibilityRole="button"
+                accessibilityLabel="Retry ranging"
+                onPress={async () => {
+                  await ranging.start();
+                }}
+              >
+                <FontAwesome name="refresh" size={16} color="#111" />
+                <Text style={styles.secondaryBtnText}>Retry</Text>
+              </Pressable>
+
+              <Pressable
+                style={[
+                  styles.stopBtn,
+                  rangingEnabled ? styles.stopBtnActive : null,
+                  !rangingEnabled && styles.btnDisabled,
+                ]}
+                disabled={!rangingEnabled}
+                accessibilityRole="button"
+                accessibilityLabel="Stop ranging"
+                onPress={async () => {
+                  await ranging.stop();
+                  setRangingEnabled(false);
+                }}
+              >
+                <FontAwesome name="stop" size={16} color={rangingEnabled ? '#fff' : '#111'} />
+                <Text style={[styles.playStopTextStop, rangingEnabled ? styles.playStopTextStopActive : null]}>
+                  Stop
+                </Text>
+              </Pressable>
+            </View>
+
+            {rangingEnabled ? (
+              <>
+                {/* Compass + distance live inside ranging */}
+                <View style={styles.compassWrap}>
+                  <View style={styles.compassRing} />
+                  <Text style={[styles.cardinal, styles.cardN]}>N</Text>
+                  <Text style={[styles.cardinal, styles.cardE]}>E</Text>
+                  <Text style={[styles.cardinal, styles.cardS]}>S</Text>
+                  <Text style={[styles.cardinal, styles.cardW]}>W</Text>
+
+                  <Animated.View style={[styles.arrowWrap, { transform: [{ rotate: rotateInterpolate }] }]}>
+                    <View style={styles.arrow} />
+                    <View style={styles.arrowTip} />
+                  </Animated.View>
+                </View>
+
+                <Text style={styles.distanceText}>{formatMeters(distanceM)}</Text>
+
+                <View style={styles.metricsRow}>
+                  <View style={styles.metricPill}>
+                    <Text style={styles.metricLabel}>State</Text>
+                    <Text style={styles.metricValue} numberOfLines={1}>
+                      {String(ranging.state)}
+                    </Text>
+                  </View>
+                  <View style={styles.metricPill}>
+                    <Text style={styles.metricLabel}>Stale</Text>
+                    <Text style={styles.metricValue}>{Math.round((ranging.staleMs ?? 0) / 1000)}s</Text>
+                  </View>
+                  <View style={styles.metricPill}>
+                    <Text style={styles.metricLabel}>Rel</Text>
+                    <Text style={styles.metricValue}>{Math.round(relativeDeg)}°</Text>
+                  </View>
+                </View>
+              </>
+            ) : null}
+          </View>
+
+          {/* Map: last registered location */}
+          <View style={styles.mapCard}>
+            <View style={styles.mapHeaderRow}>
+              <Text style={styles.mapTitle}>Last location</Text>
+              {locationUpdatedText ? <Text style={styles.mapMeta}>{locationUpdatedText}</Text> : null}
+            </View>
+
+            {!coords ? (
+              <Text style={styles.muted}>No location registered yet.</Text>
+            ) : Platform.OS === 'web' || !MapView ? (
+              <View style={styles.mapFallback}>
+                <Text style={styles.muted}>Map preview isn’t available on this platform/build.</Text>
+                <Text style={styles.mutedSmall}>
+                  Lat: {coords.latitude.toFixed(5)} • Lng: {coords.longitude.toFixed(5)}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.mapWrap}>
+                <MapView
+                  style={StyleSheet.absoluteFill}
+                  initialRegion={{
+                    latitude: coords.latitude,
+                    longitude: coords.longitude,
+                    latitudeDelta: 0.01,
+                    longitudeDelta: 0.01,
+                  }}
+                  // Keep the page scrollable even when swiping on the map preview.
+                  scrollEnabled={false}
+                  zoomEnabled={false}
+                  rotateEnabled={false}
+                  pitchEnabled={false}
+                  showsUserLocation={locationPerm}
+                  showsMyLocationButton={locationPerm}
+                >
+                  {Marker ? (
+                    <Marker coordinate={coords} title={member?.name ? String(member.name) : 'Member'} />
+                  ) : null}
+                </MapView>
+              </View>
+            )}
+          </View>
+
+          {/* Compass UI moved into Ranging section */}
+        </View>
+      </ScrollView>
     </View>
   );
 }
@@ -151,8 +413,11 @@ export default function MemberRangingMockScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    paddingHorizontal: 16,
     backgroundColor: 'transparent',
+  },
+  scroll: { flex: 1 },
+  scrollContent: {
+    paddingHorizontal: 16,
   },
   heroCard: {
     borderRadius: 18,
@@ -179,9 +444,109 @@ const styles = StyleSheet.create({
   },
   heroTitle: { fontSize: 22, fontWeight: '900' },
   heroMetaText: { marginTop: 6, opacity: 0.7, fontSize: 12 },
+  errorText: { marginTop: 10, color: '#b00020', fontWeight: '700' },
+
+  rangingCard: {
+    marginTop: 14,
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.10)',
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    gap: 10,
+  },
+  rangingHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  rangingHeaderRight: { flexDirection: 'row', alignItems: 'flex-end', gap: 10 },
+  rangingTitle: { fontSize: 14, fontWeight: '900' },
+  rangingMeta: { fontSize: 11, opacity: 0.65, fontWeight: '700' },
+
+  mapCard: {
+    marginTop: 14,
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.10)',
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    gap: 10,
+  },
+  mapHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  mapTitle: { fontSize: 14, fontWeight: '900' },
+  mapMeta: { fontSize: 11, opacity: 0.65, fontWeight: '700' },
+  mapWrap: {
+    height: 220,
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.10)',
+    backgroundColor: 'rgba(0,0,0,0.04)',
+  },
+  mapFallback: {
+    paddingVertical: 10,
+    gap: 6,
+  },
+  muted: { opacity: 0.7, lineHeight: 18 },
+  mutedSmall: { opacity: 0.7, fontSize: 12 },
+
+  playStopRow: { flexDirection: 'row', gap: 12, justifyContent: 'flex-end', alignItems: 'center' },
+  playBtn: {
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    minHeight: 44,
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2f7d32',
+  },
+  secondaryBtn: {
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    minHeight: 44,
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.5)',
+  },
+  secondaryBtnText: { color: '#111', fontSize: 16, fontWeight: '900' },
+  stopBtn: {
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    minHeight: 44,
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.5)',
+  },
+  stopBtnActive: {
+    borderColor: 'rgba(176,0,32,0.18)',
+    backgroundColor: '#b00020',
+  },
+  playStopText: { color: '#fff', fontSize: 16, fontWeight: '900' },
+  playStopTextStop: { color: '#111', fontSize: 16, fontWeight: '900' },
+  playStopTextStopActive: { color: '#fff' },
+  btnDisabled: { opacity: 0.5 },
 
   compassWrap: {
-    marginTop: 16,
+    marginTop: 6,
     alignSelf: 'center',
     width: 240,
     height: 240,
@@ -232,7 +597,7 @@ const styles = StyleSheet.create({
   },
 
   distanceText: {
-    marginTop: 16,
+    marginTop: 10,
     fontSize: 34,
     fontWeight: '900',
     textAlign: 'center',
